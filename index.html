@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>影解析PWA</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="manifest" href="manifest.json">
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #f0f0f5;
+      padding: 20px;
+      color: #333;
+    }
+    h2, h3 { color: #2c3e50; }
+    label { font-weight: bold; display: block; margin-top: 10px; }
+    input, button {
+      margin: 8px 0;
+      padding: 8px;
+      width: 100%;
+      font-size: 1em;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+    button {
+      background-color: #3498db;
+      color: white;
+      cursor: pointer;
+    }
+    button:hover { background-color: #2980b9; }
+    #resetShadowBtn { background-color: #e74c3c; }
+    #resetShadowBtn:hover { background-color: #c0392b; }
+    #forceEstimateBtn { background-color: #16a085; }
+    #forceEstimateBtn:hover { background-color: #138d75; }
+    canvas {
+      border: 1px solid #ccc;
+      margin-top: 10px;
+      max-width: 100%;
+      touch-action: none;
+    }
+    pre {
+      background: #fff;
+      padding: 12px;
+      border: 1px solid #ccc;
+      white-space: pre-wrap;
+      font-size: 0.95em;
+    }
+    .note {
+      font-size: 0.9em;
+      color: #555;
+      margin-top: 4px;
+    }
+  </style>
+</head>
+<body>
+  <h2>📸 影解析PWA</h2>
+  <input type="file" id="imageInput" accept="image/*">
+
+  <h3>🌐 手動入力</h3>
+  <label for="latitude">緯度（例: 35.6895）</label>
+  <input type="text" id="latitude" placeholder="緯度を入力">
+  <label for="longitude">経度（例: 139.6917）</label>
+  <input type="text" id="longitude" placeholder="経度を入力">
+  <label for="dateInput">📅 撮影日を選択してください</label>
+  <input type="date" id="dateInput">
+
+  <button id="markShadowBtn">✍️ 影をマーク</button>
+  <button id="resetShadowBtn">🔄 影マークをリセット</button>
+
+  <canvas id="canvas" width="600" height="400"></canvas>
+
+  <button id="estimateTimeBtn">🔎 時刻推定を実行</button>
+
+  <p class="note">
+    ※影がない・マークできない場合は「影なし強制時刻検出」で  
+    太陽の南中（solarNoon＝最も真南に来る時刻）を撮影時刻の推定値として返します。
+  </p>
+  <button id="forceEstimateBtn">☀️ 影なし強制時刻検出</button>
+
+  <h3>📦 結果</h3>
+  <pre id="output">解析結果がここに表示されます</pre>
+
+  <!-- Exif.js -->
+  <script src="https://cdn.jsdelivr.net/npm/exif-js"></script>
+  <!-- SunCalc.js -->
+  <script src="https://cdn.jsdelivr.net/npm/suncalc/suncalc.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js');
+    }
+
+    const canvas = document.getElementById('canvas');
+    const ctx    = canvas.getContext('2d');
+    let img, shadowPoints = [], marking = false, measuredAz = null;
+
+    function normalizeAngle(a) {
+      return ((a + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+    }
+
+    function calcShadowBearing(p1, p2) {
+      const dx = p2.x - p1.x;
+      const dy = p1.y - p2.y;
+      return normalizeAngle(Math.atan2(dx, dy));
+    }
+
+    // 影あり推定
+    function estimateTimeFromShadow(dateStr, lat, lon, shadowAz) {
+      const day   = new Date(dateStr + 'T00:00:00');
+      const times = SunCalc.getTimes(day, lat, lon);
+      const start = times.sunrise.getTime();
+      const end   = times.sunset.getTime();
+      const step  = 60 * 1000;
+      let best    = { diff: Infinity, time: null, alt: null, az: null };
+
+      for (let t = start; t <= end; t += step) {
+        const pos     = SunCalc.getPosition(new Date(t), lat, lon);
+        const azNorth = normalizeAngle(pos.azimuth + Math.PI);
+        const diff    = Math.abs(normalizeAngle(azNorth - shadowAz));
+        if (diff < best.diff) {
+          best = { diff, time: new Date(t), alt: pos.altitude, az: pos.azimuth };
+        }
+      }
+      return best;
+    }
+
+    // 影なし強制推定（修正）
+    function estimateTimeWithoutShadow(dateStr, lat, lon) {
+      const day   = new Date(dateStr + 'T00:00:00');
+      const times = SunCalc.getTimes(day, lat, lon);
+      return times.solarNoon;
+    }
+
+    document.getElementById('imageInput').addEventListener('change', e => {
+      const file   = e.target.files[0];
+      const reader = new FileReader();
+      img = new Image();
+
+      reader.onload = evt => {
+        img.src = evt.target.result;
+        img.onload = () => {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+          EXIF.getData(img, function() {
+            const lat     = EXIF.getTag(this, 'GPSLatitude');
+            const lon     = EXIF.getTag(this, 'GPSLongitude');
+            const dateRaw = EXIF.getTag(this, 'DateTimeOriginal');
+            if (lat && lon) {
+              document.getElementById('latitude').value  = lat;
+              document.getElementById('longitude').value = lon;
+            }
+            if (dateRaw) {
+              const d = dateRaw.replace(/^(\d{4}):(\d{2}):(\d{2}).*/, '$1-$2-$3');
+              document.getElementById('dateInput').value = d;
+            }
+            document.getElementById('output').textContent =
+              'Exif情報を読み込みました。影をマークしてください。';
+          });
+        };
+      };
+      reader.readAsDataURL(file);
+    });
+
+    document.getElementById('markShadowBtn').onclick = () => {
+      shadowPoints = [];
+      measuredAz   = null;
+      marking      = true;
+      document.getElementById('output').textContent =
+        '画面を2回タップして「影の始点」「影の終点」を指定してください';
+    };
+
+    document.getElementById('resetShadowBtn').onclick = () => {
+      shadowPoints = [];
+      measuredAz   = null;
+      marking      = false;
+      if (img) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      }
+      document.getElementById('output').textContent = '影マークをリセットしました。';
+    };
+
+    canvas.addEventListener('pointerdown', e => {
+      if (!marking) return;
+      const rect = canvas.getBoundingClientRect();
+      const x    = e.clientX - rect.left;
+      const y    = e.clientY - rect.top;
+      shadowPoints.push({ x, y });
+      ctx.fillStyle = 'red';
+      ctx.beginPath();
+      ctx.arc(x, y, 5, 0, 2*Math.PI);
+      ctx.fill();
+
+      if (shadowPoints.length === 2) {
+        marking = false;
+        ctx.strokeStyle = 'red';
+        ctx.beginPath();
+        ctx.moveTo(shadowPoints[0].x, shadowPoints[0].y);
+        ctx.lineTo(shadowPoints[1].x, shadowPoints[1].y);
+        ctx.stroke();
+        measuredAz = calcShadowBearing(shadowPoints[0], shadowPoints[1]);
+        document.getElementById('output').textContent =
+          `測定された影の方位: ${(measuredAz * 180/Math.PI).toFixed(2)}°`;
+      }
+    });
+
+    document.getElementById('estimateTimeBtn').onclick = () => {
+      if (measuredAz === null) {
+        return alert('まず「影をマーク」で始点・終点を指定してください');
+      }
+      const lat  = parseFloat(document.getElementById('latitude').value);
+      const lon  = parseFloat(document.getElementById('longitude').value);
+      const date = document.getElementById('dateInput').value;
+      if (isNaN(lat) || isNaN(lon) || !date) {
+        return alert('緯度・経度・撮影日を正しく入力してください');
+      }
+
+      const best    = estimateTimeFromShadow(date, lat, lon, measuredAz);
+      const timeStr = best.time.toLocaleTimeString('ja-JP', { hour:'2-digit', minute:'2-digit' });
+      const altDeg  = (best.alt * 180/Math.PI).toFixed(2);
+      const azDeg   = (best.az  * 180/Math.PI).toFixed(2);
+
+      document.getElementById('output').textContent =
+        `推定結果：\n` +
+        `撮影推定時刻: ${timeStr}\n` +
+        `太陽高度: ${altDeg}°\n` +
+        `太陽方位: ${azDeg}°\n` +
+        `誤差: ${best.diff.toFixed(4)} rad`;
+    };
+
+    document.getElementById('forceEstimateBtn').onclick = () => {
+      const lat  = parseFloat(document.getElementById('latitude').value);
+      const lon  = parseFloat(document.getElementById('longitude').value);
+      const date = document.getElementById('dateInput').value;
+      if (isNaN(lat) || isNaN(lon) || !date) {
+        return alert('緯度・経度・撮影日を正しく入力してください');
+      }
+      const noon = estimateTimeWithoutShadow(date, lat, lon);
+      const timeStr = noon.toLocaleTimeString('ja-JP', { hour:'2-digit', minute:'2-digit' });
+      document.getElementById('output').textContent =
+        `影なし強制推定：\n` +
+        `推定撮影時刻: ${timeStr}（太陽南中）\n` +
+        `※簡易推定です。誤差が大きい可能性があります。`;
+    };
+  </script>
+</body>
+</html>
