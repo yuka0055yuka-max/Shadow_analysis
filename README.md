@@ -1,5 +1,7 @@
 # Shadow_analysis
 
+https://yuka0055yuka-max.github.io/Shadow_analysis/
+
 **Shadow_analysis** は、画像内の影の方向と位置情報から、撮影された時刻を推定する革新的な PWA（Progressive Web App）です。  
 Exif情報がない画像でも、緯度・経度・撮影日を入力し、影の始点・終点をキャンバス上で指定することで、太陽の位置から撮影時刻を逆算します。
 
@@ -40,8 +42,8 @@ Shadow_analysis/
 1. `image-analyzer.html` をブラウザで開く
 2. 画像をアップロード（Exif情報があれば自動解析）
 3. 緯度・経度・撮影日を入力（Exifがない場合）
-4. 「影をマーク」ボタン → キャンバス上で2点を指定
-5. 「時刻推定を実行」ボタン → 結果表示
+4 「影をマーク」ボタン → キャンバス上で2点を指定
+5 「時刻推定を実行」ボタン → 結果表示
 6. 影がない場合は「影なし強制時刻検出」ボタンで南中時刻を推定
 
 ---
@@ -65,5 +67,5 @@ Special thanks to [Exif.js](https://github.com/exif-js/exif-js) and [SunCalc](ht
 
 MIT License
 
-
+https://yuka0055yuka-max.github.io/Shadow_analysis/
 
