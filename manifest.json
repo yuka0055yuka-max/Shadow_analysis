@@ -1,9 +1,1 @@
-{
-  "name": "渋谷スクランブル",
-  "short_name": "スクランブル",
-  "start_url": "/shibuya/",
-  "display": "standalone",
-  "background_color": "#000000",
-  "theme_color": "#0f0f14",
-  "description": "ネオンと満月が輝く渋谷の交差点を再現したPWA"
-}
+
